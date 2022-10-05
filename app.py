@@ -9,7 +9,7 @@ from io import BytesIO
 def init():
     global model
     
-    model = whisper.load_model("base")
+    model = whisper.load_model("medium")
 
 # Inference is ran for every server call
 # Reference your preloaded global model variable here.
@@ -27,7 +27,7 @@ def inference(model_inputs:dict) -> dict:
     
     # Run the model
     result = model.transcribe("input.mp3")
-    output = {"text":result["text"]}
+    output = dict(text=result['text'], model='medium')
     os.remove("input.mp3")
     # Return the results as a dictionary
     return output
