@@ -1,5 +1,5 @@
 # Must use a Cuda version 11+
-FROM pytorch/pytorch:1.11.0-cuda11.3-cudnn8-runtime
+FROM pytorch/pytorch:1.13.1-cuda11.6-cudnn8-runtime
 
 WORKDIR /
 
@@ -16,6 +16,7 @@ ADD server.py .
 
 # Add your model weight files 
 # (in this case we have a python script)
+ADD token /root/.huggingface/token
 ADD download.py .
 RUN python3 download.py
 
