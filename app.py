@@ -15,10 +15,31 @@ def init():
     model = whisper.load_model("medium")
     pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization', use_auth_token=True)
 
+def info():
+    return {
+        'cuda': {
+            'is_available': torch.cuda.is_available(),
+            'device_count': torch.cuda.device_count(),
+            'current_device': torch.cuda.current_device() if torch.cuda.is_available() else None,
+            'segmentation': all(p.is_cuda for p in pipeline._segmentation.model.parameters()),
+            'classifier': all(p.is_cuda for p in pipeline._embedding.classifier_.parameters()),
+            'asr': all(p.is_cuda for p in model.parameters()),
+        },
+        'device': {
+            'segmentation': str(pipeline._segmentation.model.device),
+            'classifier': str(pipeline._embedding.classifier_.device),
+            'asr': str(model.device),
+        },
+    }
+
 # Inference is ran for every server call
 # Reference your preloaded global model variable here.
 def inference(model_inputs:dict) -> dict:
     global model, pipeline
+
+    info_val = model_inputs.get('info')
+    if info_val:
+        return dict(info=info())
 
     # Parse out your arguments
     mp3BytesString = model_inputs.get('mp3BytesString', None)
@@ -42,7 +63,7 @@ def inference(model_inputs:dict) -> dict:
         samples = segment.get_array_of_samples()
         array = np.array(samples).astype(np.float32)
         array /= np.iinfo(samples.typecode).max
-        transcription = model.transcribe(array)
+        transcription = model.transcribe(array, language='en')
         output.append(dict(start=turn.start, end=turn.end, speaker=speaker, transcription=transcription['text']))
         previous_ts = end
 
@@ -52,4 +73,7 @@ def inference(model_inputs:dict) -> dict:
     #output = dict(dz=[dict(turn=turn, speaker=speaker) for turn, _, speaker in dz.itertracks(yield_label=True)])
     os.remove("input.ogg")
     # Return the results as a dictionary
-    return output
+    if info_val == False:
+        return dict(transcription=output)
+    else:
+        return dict(transcription=output, info=info())
