@@ -6,6 +6,7 @@ import base64
 from io import BytesIO
 from pydub import AudioSegment
 from pyannote.audio import Pipeline
+from sanic.log import logger as log
 
 # Init is ran on server startup
 # Load your model to GPU as a global variable here using the variable name "model"
@@ -47,16 +48,25 @@ def inference(model_inputs:dict) -> dict:
     if mp3BytesString == None:
         return {'message': "No input provided"}
     
-    with BytesIO(base64.b64decode(mp3BytesString.encode("ISO-8859-1"))) as mp3Bytes:
-        del mp3BytesString
+    audio_file = base64.b64decode(mp3BytesString)
+    del mp3BytesString
+
+    log.warn(f'Inference request received, audio file {len(audio_file)} bytes');
+    with BytesIO(audio_file) as mp3Bytes:
+        del audio_file
         with open('input.ogg','wb') as file:
             file.write(mp3Bytes.getbuffer())
 
-    audio = AudioSegment.from_file('input.ogg').split_to_mono()[0].set_frame_rate(16000)
+    original_audio = AudioSegment.from_file('input.ogg')
+    log.warn(f'Reading audio file. Sample rate: {original_audio.frame_rate}Hz. Channels: {original_audio.channels}. Duration: {len(original_audio)}ms');
+    audio = original_audio.split_to_mono()[0].set_frame_rate(16000)
+    del original_audio
+    log.warn(f'Diarizing...')
     dz = pipeline('input.ogg')
     output = []
     previous_ts = 0
     for turn, _, speaker in dz.itertracks(yield_label=True):
+        log.warn(f'ASR on segment {turn.start}-{turn.end}...')
         start, end = int(turn.start * 1000), int(turn.end * 1000)
         ts0 = min(max(start - 500, previous_ts), start)
         segment = audio[ts0:end]
@@ -64,13 +74,14 @@ def inference(model_inputs:dict) -> dict:
         array = np.array(samples).astype(np.float32)
         array /= np.iinfo(samples.typecode).max
         transcription = model.transcribe(array, language='en')
-        output.append(dict(start=turn.start, end=turn.end, speaker=speaker, transcription=transcription['text']))
+        output.append(dict(start=turn.start, end=turn.end, speaker=speaker, transcription=transcription.get('text')))
         previous_ts = end
 
     # Run the model
     #result = model.transcribe("input.ogg")
     #output = dict(text=result['text'], model='medium')
     #output = dict(dz=[dict(turn=turn, speaker=speaker) for turn, _, speaker in dz.itertracks(yield_label=True)])
+    log.warn(f'Returning results')
     os.remove("input.ogg")
     # Return the results as a dictionary
     if info_val == False:
