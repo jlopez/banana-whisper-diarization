@@ -16,6 +16,7 @@ def init():
 
     model = whisper.load_model("medium")
     pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization', use_auth_token=True)
+    # pipeline._segmentation.progress_hook = print
 
 def info():
     return {
@@ -96,39 +97,32 @@ def inference(model_inputs:dict) -> dict:
 
     sw.lapse('write')
 
-    original_audio = AudioSegment.from_file('input.ogg')
-    log.info(f'Reading audio file. Sample rate: {original_audio.frame_rate}Hz. Channels: {original_audio.channels}. Duration: {len(original_audio)}ms');
+    waveform = AudioSegment.from_file('input.ogg')
+    os.remove("input.ogg")
+    log.info(f'Reading audio file. Sample rate: {waveform.frame_rate}Hz. Channels: {waveform.channels}. Duration: {len(waveform)}ms');
+    waveform = waveform.split_to_mono()[0].set_frame_rate(16000)
+    waveform = waveform.get_array_of_samples()
+    waveform = torch.tensor(waveform, dtype=torch.float32).reshape(1, -1) / np.iinfo(waveform.typecode).max
     sw.lapse('load')
 
-    audio = original_audio.split_to_mono()[0].set_frame_rate(16000)
-    del original_audio
-    sw.lapse('resample')
-
     log.info(f'Diarizing...')
-    dz = pipeline('input.ogg')
+    dz = pipeline(dict(waveform=waveform, sample_rate=16000))
     sw.lapse('diarization')
 
+    waveform = waveform.reshape(-1)
     output = []
     previous_ts = 0
     for turn, _, speaker in dz.itertracks(yield_label=True):
-        log.info(f'ASR on segment {turn.start}-{turn.end}...')
-        start, end = int(turn.start * 1000), int(turn.end * 1000)
-        ts0 = min(max(start - 500, previous_ts), start)
-        segment = audio[ts0:end]
-        samples = segment.get_array_of_samples()
-        array = np.array(samples).astype(np.float32)
-        array /= np.iinfo(samples.typecode).max
-        transcription = model.transcribe(array, language='en')
-        output.append(dict(start=turn.start, end=turn.end, speaker=speaker, transcription=transcription.get('text')))
+        log.info(f'ASR on segment {turn.start:.3f}-{turn.end:.3f}...')
+        start, end = int(turn.start * 16000), int(turn.end * 16000)
+        ts0 = min(max(start - 8000, previous_ts), start)
+        segment = waveform[ts0:end]
+        transcription = model.transcribe(segment, language='en')
+        output.append(dict(start=start / 16000, end=end / 16000, speaker=speaker, transcription=transcription.get('text')))
         previous_ts = end
         sw.lapse('transcription')
 
-    # Run the model
-    #result = model.transcribe("input.ogg")
-    #output = dict(text=result['text'], model='medium')
-    #output = dict(dz=[dict(turn=turn, speaker=speaker) for turn, _, speaker in dz.itertracks(yield_label=True)])
     log.info(f'Returning results')
-    os.remove("input.ogg")
     # Return the results as a dictionary
     rv = dict(transcription=output, timings=sw.report())
     if info_val:
